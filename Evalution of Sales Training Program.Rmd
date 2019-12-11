@@ -1,0 +1,1177 @@
+---
+title: "Final Project"
+author: "Apeqsha Dudani, Jingyao Kang, Tam Nguyen, Lily Wang, Jinjin Yu"
+date: "11/28/2018"
+output:
+  pdf_document: default
+  html_document: default
+editor_options:
+  chunk_output_type: console
+---
+
+```{r}
+# Set the directory
+
+# install packages
+
+
+# Load libraries everytime you start a session
+library(corrplot)
+library(ggeffects)
+library(stargazer)
+library(gdata)
+library(ggplot2)
+#library(psych) 
+library(ggeffects)
+#library(QuantPsyc)
+library(usdm)
+library(lmtest)
+library(multiwayvcov)
+library(sandwich)
+library(foreign)
+library(AER)
+library(aod)
+library(Rcpp)
+library(mfx)
+library(nnet)
+library(reshape2)
+library(VIF)
+library(MASS)
+library(readstata13)
+library(msm)
+
+# turn off scientific notation except for big numbers. 
+options(scipen = 9)
+```
+
+```{r}
+## Intialization ##
+rm(list = ls())
+mydata =  read.dta13("Annual sales-returns.dta")
+
+stargazer(mydata, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")
+
+## Data Cleaning ##
+# Setting blank values to 'Unknown'
+mydata$sa_assignmentcategory <- ifelse(mydata$sa_assignmentcategory=="FR" | mydata$sa_assignmentcategory == "FT", "FT",ifelse(mydata$sa_assignmentcategory=="PR" | mydata$sa_assignmentcategory == "PT","PT","Unknown"))
+mydata <- mydata[ !(mydata$sa_gender==''), ]
+mydata <- mydata[ !(mydata$sa_maritalstatus==''), ]
+mydata$sa_gender <- ifelse(mydata$sa_gender=='F',1,0)
+mydata$sa_maritalstatus <- ifelse(mydata$sa_maritalstatus=='M',1,0)
+mydata$sa_dependent <- ifelse(mydata$sa_dependent=='Yes',1,0)
+mydata$sa_assignmentcategory = ifelse(mydata$sa_assignmentcategory=="FT" | mydata$sa_assignmentcategory == "FR",1, 0)
+mydata$majorcompetitorpresent <- ifelse(mydata$majorcompetitorpresent=='','Unknown',mydata$majorcompetitorpresent)
+
+# Setting blank values to the mean values
+mydata$sa_yearsofservice = ifelse(is.na(mydata$sa_yearsofservice),mean(mydata$sa_yearsofservice,na.rm=TRUE),mydata$sa_yearsofservice)
+mydata$sa_rateofpay = ifelse(is.na(mydata$sa_rateofpay),mean(mydata$sa_rateofpay,na.rm=TRUE),mydata$sa_rateofpay)
+mydata$avg_female = ifelse(is.na(mydata$avg_female),mean(mydata$avg_female,na.rm=TRUE),mydata$avg_female)
+mydata$avg_age = ifelse(is.na(mydata$avg_age),mean(mydata$avg_age,na.rm=TRUE),mydata$avg_age)
+mydata$avg_income = ifelse(is.na(mydata$avg_income),mean(mydata$avg_income,na.rm=TRUE),mydata$avg_income)
+mydata$avg_homeowner = ifelse(is.na(mydata$avg_homeowner),mean(mydata$avg_homeowner,na.rm=TRUE),mydata$avg_homeowner)
+mydata$avg_residency = ifelse(is.na(mydata$avg_residency),mean(mydata$avg_residency,na.rm=TRUE),mydata$avg_residency)
+mydata$avg_childowner = ifelse(is.na(mydata$avg_childowner),mean(mydata$avg_childowner,na.rm=TRUE),mydata$avg_childowner)
+mydata$mallsalessf = ifelse(is.na(mydata$mallsalessf),mean(mydata$mallsalessf,na.rm=TRUE),mydata$mallsalessf)
+mydata$storesqft = ifelse(is.na(mydata$storesqft),mean(mydata$storesqft,na.rm=TRUE),mydata$storesqft)
+mydata$totalcases = ifelse(is.na(mydata$totalcases),mean(mydata$totalcases,na.rm=TRUE),mydata$totalcases)
+mydata$padcount = ifelse(is.na(mydata$padcount),mean(mydata$padcount,na.rm=TRUE),mydata$padcount)
+
+# Creating new fields
+mydata$sa_rateofpay2 = ifelse(mydata$sa_rateofpay > 30, mydata$sa_rateofpay/80, mydata$sa_rateofpay)
+
+# Create a variable for existence of training or not (none in 2011)
+mydata$trainingoffered = ifelse(mydata$year!="2011",1,0)
+mydata$trainingtaken = ifelse((mydata$year == "2012" & (mydata$warranty == 1 | mydata$credit == 1 | mydata$specialevent == 1)) | (mydata$year == "2013" & (mydata$warranty == 1 | mydata$credit == 1 | mydata$specialevent == 1 | mydata$celebritybrand == 1 | mydata$celebration == 1 | mydata$watches == 1 | mydata$color == 1 | mydata$service_selling == 1)),1,0)
+
+## Create the training group (1 if an employee has taken any training, regardless of year)
+training_df <- subset(mydata, trainingtaken == 1, employee_id)
+mydata$training_group <- ifelse(mydata$employee_id %in% training_df$employee_id,1,0)
+table(mydata$training_group)
+
+#Remove employees only in 2011
+employee1213 <- subset(mydata, year == 2012 | year == 2013, employee_id)
+mydata = mydata[mydata$employee_id %in% employee1213$employee_id,]
+table(mydata$training_group)
+
+#Remove employees with rate of pay < 1
+mydata = mydata[mydata$sa_rateofpay2 > 1,]
+
+#Seperate datasets
+df1112 = mydata[mydata$year == 2011 | mydata$year == 2012, ]
+df1213 = mydata[mydata$year == 2012 | mydata$year == 2013, ]
+
+#Summary Statistics
+stargazer(mydata, type="text", median=TRUE, iqr=TRUE,digits=1, title="Descriptive Statistics")
+
+#Check for Multicollinearity
+df <- with(mydata,data.frame(trainingoffered, training_group, sa_assignmentcategory, sa_yearsofservice, sa_dependent, sa_gender,avg_age,avg_income,mallsalessf,storesqft,totalcases, sa_maritalstatus, mydata$avg_female, avg_homeowner, avg_residency, sa_dependent, avg_childowner, sa_rateofpay2, year, totalcases, padcount))
+df2 = data.frame(mydata$year, mydata$trainingoffered)
+cor(df)
+corrplot(cor(df), method = "number") #No severe multicollinearity (nothing above 0.8)
+vifcor(df) #Because padcount and total cases are highly correlated. We only use totalcases and remove padcount. 
+vifcor(df2) #For year and trainingoffered, we dont use them together.
+```
+
+```{r}
+# Question1: What is the impact of training program on salesperson sales and return performance?
+# Test control variables, split out 11-12
+
+#Sales Quantity
+model1sq1 <- glm((salesquantity) ~ trainingoffered*training_group + numofmonths_worked +sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + totalcases, family="poisson", data=mydata)#Poisson model
+
+model1sq2 <- glm.nb((salesquantity) ~ trainingoffered*training_group + numofmonths_worked +sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + totalcases, data=mydata)#Negative Binomial model
+
+poisson1sq1 <- glm(salesquantity~1, data=mydata, family="poisson")#build Poisson NULL model
+negbin1sq1 <- glm.nb(salesquantity ~ 1, data = mydata) #build NB NULL model
+
+lrtest(model1sq1, poisson1sq1)#significant so Poisson model does not fit the data
+lrtest(model1sq2, negbin1sq1)#significant so NB model fits the data
+lrtest(model1sq1, model1sq2)#Since the p-value is significant, it means NB is better than Possion => Model1sq2
+
+gqtest(model1sq2)#gqtest indicates there is no heteroskedascity
+bptest(model1sq2)#gqtest indicates there is heteroskedascity
+
+HWrobstder1sq2 <- sqrt(diag(vcovHC(model1sq2, type="HC1")))#obtain HW robust standard error
+
+stargazer(model1sq2, 
+          se = list(HWrobstder1sq2),
+          title="Regression Results", type="text", 
+          column.labels=c("Negative Binomial"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))#the significant positive sign of the interaction terms means the training program has a postive impact on sales quantity
+
+newdata = with(mydata,data.frame(trainingoffered = c(0,1,0,1), training_group = rep(0:1,each = 2), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), avg_homeowner = mean(avg_homeowner)))#create data frame with mean values with trainingoffered and training_group varying
+newdata$logsales = predict(model1sq2, newdata)#predict log(salesquantity)
+newdata$salesquantity = exp(newdata$logsales) - 1#calculate salesqauntity
+ggplot(newdata, aes(x = trainingoffered, y = salesquantity)) + geom_line(aes(colour = factor(training_group)), size = 1) + scale_colour_discrete(labels=c("No", "Yes")) +
+    scale_x_continuous(breaks=c(0,1), labels=c("No", "Yes")) + xlab("Offering the Training Program") + ylab("Sales Quantity")
+#from the graph, we conclue that for this sample, offering the training program will increase the sales quantity of salespeople who have the tendency to take it by 6.4% and decrease that of salespeople who don't have the tendency to take it by 17.3%.
+
+#Sales Value
+model1sv1 = lm(log(salesvalue+1) ~ trainingoffered*training_group + numofmonths_worked + sa_maritalstatus + sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + totalcases, data=mydata)#OLS model
+
+gqtest(model1sv1)#gqtest indicates there is no heteroskedascity
+bptest(model1sv1)#gqtest indicates there is heteroskedascity
+
+consstder1sv1 <- sqrt(diag(vcovHC(model1sv1, type="const")))
+
+stargazer(model1sv1, model1sv1, 
+          se = list(NULL, consstder1sv1),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS", "OLS with Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))#the insignificant sign of the interaction terms means the training program has no impact on sales value
+
+
+#Return Quantity
+model1rq1 = glm((returnquantity+1) ~ trainingoffered*training_group + sa_rateofpay2 + sa_gender + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), family = "poisson", data=mydata)#Possion model
+
+model1rq2 = glm.nb((returnquantity+1) ~ trainingoffered*training_group + sa_rateofpay2 + sa_gender + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), data=mydata)#NB model
+
+poisson1rq1 <- glm(returnquantity~1, data=mydata, family="poisson")#build Possion NULL model
+negbin1rq1 <- glm.nb(returnquantity ~ 1, data = mydata) #build NB NULL model
+
+lrtest(model1rq1, poisson1rq1)#significant so Poisson model does not fit the data
+lrtest(model1rq2, negbin1rq1)#significant so NB model fits the data
+lrtest(model1rq1, model1rq2)#the insignificant p-value shows that NB is better
+
+gqtest(model1rq2)#gqtest indicates there is no heteroskedascity
+bptest(model1rq2)#bptest indicates there is heteroskedascity
+
+consstder1rq2 <- sqrt(diag(vcovHC(model1rq2, type="const")))#obtain robust standard error
+
+stargazer(model1rq2, model1rq2, 
+          se = list(NULL, consstder1rq2),
+          title="Regression Results", type="text", 
+          column.labels=c("Poisson with Rbst SE", "NB with Rbst SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))#the significant negative sign means offering the training module decreases return quanity, thus having a positive impact on return quantity
+
+newdata3 = with(mydata,data.frame(trainingoffered = c(0,1,0,1), training_group = rep(0:1,each = 2), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), salesquantity = mean(salesquantity), salesvalue = mean(salesvalue), avg_homeowner = mean(avg_homeowner)))
+newdata3$logreturnquantity = predict(model1rq2, newdata3)
+newdata3$returnquantity = exp(newdata3$logreturnquantity) - 1
+ggplot(newdata3, aes(x = trainingoffered, y = returnquantity)) + geom_line(aes(colour = factor(training_group)), size = 1) + scale_colour_discrete(labels=c("No", "Yes")) +
+    scale_x_continuous(breaks=c(0,1), labels=c("No", "Yes"))#the out of sample prediction shows that for people who have the tendency to take the training, offering a training program will increase the return quantity by 2.3%. For those who don't have the tendency to take the training, offering the program will inrease the return quantity by 18.4%.
+
+#Return Value
+model1rv1 = lm(log(returnvalue+1) ~ trainingoffered*training_group + sa_maritalstatus + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf  + log(salesvalue + 1), data=mydata)
+
+gqtest(model1rv1)#gqtest indicates there is no heteroskedascity
+bptest(model1rv1)#gqtest indicates there is heteroskedascity
+
+consstder1rv1 <- sqrt(diag(vcovHC(model1rv1, type="const")))
+
+stargazer(model1rv1, model1rv1, 
+          se = list(NULL, consstder1rv1),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS", "OLS with Robust SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))#the insignificant sign means there is no impact of offering a training program on return value
+```
+
+
+
+```{r}
+# Question2: What is the impact of complete at least one training module on salesperson sales and return performance?
+
+  # SALES VALUE
+      #OLS model
+model2sv=lm(log(salesvalue+1) ~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory+ sa_rateofpay2+ factor(year), data=df1213)
+
+stargazer(model2sv,
+          title="Regression Results", type="text", 
+          column.labels=c("ModelQ2"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+     
+    #Endogeneity=> Findings different IVs.
+        
+          #2SLS model with sa_dependent and sa_maritalstatus as IVs
+ivmodel2SV2 = ivreg(log(salesvalue+1) ~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + sa_assignmentcategory + factor(year) + totalcases + sa_rateofpay2 + sa_gender | sa_dependent + sa_maritalstatus + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + sa_assignmentcategory + factor(year) + totalcases + sa_rateofpay2+ sa_gender, data=df1213) 
+
+summary(ivmodel2SV2,diagnostics = TRUE) #Passes all tests=> 2SLS Model
+
+gqtest(ivmodel2SV2)
+bptest(ivmodel2SV2)
+HWrobstder2SV2 <- sqrt(diag(vcovHC(ivmodel2SV2, type="HC1")))
+
+#Final Model: 2SLS with dependent and marital status as IVs
+stargazer(ivmodel2SV2,
+          se=list(HWrobstder2SV2),
+          title="Regression Results", type="text", 
+          column.labels=c("2SLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#For those who took at least 1 training comparing to those who dont take training, sales value increase by 8.26 times.
+
+#SALES QUANTITY
+
+        # Poisson
+Model2SQp= glm(salesquantity~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory+ sa_rateofpay2+ factor(year), data=df1213, family="poisson")
+
+Model2SQp1=glm(salesquantity~1, data=df1213, family="poisson") 
+
+lrtest(Model2SQp, Model2SQp1) #significant so Poisson does not fit the data
+
+        #Negative Binomial
+
+Model2SQNB= glm.nb(salesquantity~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory+ sa_rateofpay2+ factor(year), data=df1213)
+
+Model2SQNB1= glm.nb(salesquantity~ 1, data=df1213)
+
+lrtest(Model2SQNB, Model2SQNB1) #significant so NB does fit the data
+lrtest(Model2SQp, Model2SQNB) #significant => Keep Negative Binomial.
+
+gqtest(Model2SQNB)
+bptest(Model2SQNB)
+HWrobstder2SQNB <- sqrt(diag(vcovHC(Model2SQNB, type="HC1")))
+
+stargazer(Model2SQNB,
+          se=list(HWrobstder2SQNB),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+        #OLS Model for Quantity
+Model2SQ=lm(log(salesquantity)~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory+ sa_rateofpay2+ factor(year), data=df1213)
+
+gqtest(Model2SQ)
+bptest(Model2SQ)
+HWrobstder2SQ <- sqrt(diag(vcovHC(Model2SQ, type="HC1")))
+
+stargazer(Model2SQ,
+          se=list(HWrobstder2SQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#We use OLS because the coefficients in NB (1.06) and OLS (0.55) are not similar.
+
+    #IVs Model: dependent and maritalstatus as IVs
+Model2SQiv= ivreg(log(salesquantity)~ training_group + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + sa_assignmentcategory + factor(year) + totalcases + sa_rateofpay2 + sa_gender | sa_dependent + sa_maritalstatus + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + sa_assignmentcategory + factor(year) + totalcases + sa_rateofpay2+ sa_gender, data=df1213) 
+
+summary(Model2SQiv, diagnostics = TRUE) #Pass all the tests
+    
+gqtest(Model2SQiv)
+bptest(Model2SQiv)
+HWrobstder2SQiv <- sqrt(diag(vcovHC(Model2SQiv, type="HC1")))
+
+stargazer(Model2SQiv,
+          se=list(HWrobstder2SQiv),
+          title="Results", type="text", 
+          column.labels=c("2SLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#For those who took at least 1 training comparing to those who dont take training, sales quantity increases by 3.80 times.
+
+
+#RETURN VALUE
+
+    #OLS Thereotical Model
+model2RV = lm(log(returnvalue+1) ~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesvalue+1),data=df1213)
+
+gqtest(model2RV)
+bptest(model2RV)
+HWrobstder2RV <- sqrt(diag(vcovHC(model2RV, type="HC1")))
+
+stargazer(model2RV,
+          se=list(HWrobstder2RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-2 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+    #Endogeneity
+      #IVs: dependent and maritalstatus
+ivmodel2RV =ivreg(log(returnvalue+1) ~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesvalue+1)| sa_dependent + sa_maritalstatus + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesvalue+1),data=df1213)
+
+summary(ivmodel2RV,diagnostics=TRUE) #Pass F-test and Sargan but insignificant Hausman=> negligible endogeneity=> OLS Model
+
+  #Final model: RETURN VALUE
+stargazer(model2RV,
+          se=list(HWrobstder2RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-2 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#For those taking at least one training comparing to those not taking any trainings, return value increase by 0.75 times
+
+
+#RETURN QUANTITY
+
+# Poisson
+Model2RQp= glm(returnquantity~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity),data=df1213, family="poisson")
+
+Model2RQp1=glm(returnquantity~1, data=df1213, family="poisson")
+
+lrtest(Model2RQp, Model2RQp1) #significant so Poisson does not fit the data
+
+        #Negative Binomial
+
+Model2RQNB= glm.nb(returnquantity~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity), data=df1213)
+
+Model2RQNB1= glm.nb(returnquantity~ 1, data=df1213)
+
+lrtest(Model2RQNB, Model2RQNB1) #significantso NB fits the data
+lrtest(Model2RQNB, Model2RQp) #significant=> NB is better
+
+gqtest(Model2RQNB)
+bptest(Model2RQNB)
+HWrobstder2RQNB <- sqrt(diag(vcovHC(Model2RQNB, type="HC1")))
+
+stargazer(Model2RQNB,
+          se=list(HWrobstder2RQNB),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+        #OLS Model for Quantity
+Model2RQ= lm(log(returnquantity+1)~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity), data=df1213 )
+
+gqtest(Model2RQ)
+bptest(Model2RQ)
+HWrobstder2RQ <- sqrt(diag(vcovHC(Model2RQ, type="HC1")))
+
+stargazer(Model2RQ,
+          se=list(HWrobstder2RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#Because the coefficient in NB (1.58) and OLS (0.56) are differen=> OLS model
+
+    #IVs Model: dependent and maritalstatus as IVs
+Model2RQiv= ivreg(log(returnquantity+1)~ training_group + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity)| sa_dependent + sa_maritalstatus + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity), data=df1213) 
+
+summary(Model2RQiv, diagnostics = TRUE) #Pass F-test and Sargan, but Hausman is insignificant=> endogeneity is negligible=> OLS model
+    
+  #Final Model: RETURN QUANTITY
+
+stargazer(Model2RQ,
+          se=list(HWrobstder2RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+#For those taking at least one training comparing to those not taking any trainings, return quantity increase by 0.56 times
+
+```
+
+
+```{r}
+# Question3: What is the impact of completing every additional training module on salesperson sales and return performance?
+# Take only 12-13 data
+mydata$sum_trainings <- rowSums(mydata[,28:35],na.rm=TRUE)
+df1213 = mydata[mydata$year == 2012 | mydata$year == 2013,]
+df1213$sum_trainingsq = (df1213$sum_trainings)^2
+
+#Sales Quantity
+model3sq1 <- glm(salesquantity ~ sum_trainings + sum_trainingsq + numofmonths_worked +sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + totalcases, family="poisson", data=df1213)#Poisson model
+
+model3sq2 <- glm.nb(salesquantity ~ sum_trainings + sum_trainingsq + numofmonths_worked +sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + totalcases, data=df1213)#Negative Binomial model
+
+model3sq3 <- lm(log(salesquantity) ~ sum_trainings + sum_trainingsq + numofmonths_worked +sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + totalcases, data=df1213)#OLS model
+
+poisson3sq1 <- glm(salesquantity~1, data=df1213, family="poisson")#create poisson NULL model
+negbin3sq1 <- glm.nb(salesquantity ~ 1, data = df1213)#create NB NULL model
+
+lrtest(model3sq1, poisson3sq1)#significant so Poisson model does not fit the data
+lrtest(model3sq2, negbin3sq1)#significant so NB model fits the data
+lrtest(model3sq1, model3sq2)#the significant p-value means NB is better than Poisson
+
+stargazer(model3sq1,model3sq2,model3sq3,
+          title="Regression Results", type="text", 
+          column.labels=c("Possion", "NB", "OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))#compare coefficients of Possion, NB and OLS
+
+confint(model3sq2, 'sum_trainings')#The 95% confidence interval of NB is (-0.15788324 , 0.04437039) and the coefficient of OLS does not fall in the range. So OLS should not be used for handling endogeneity. However, since we don't know how to deal with endogeneity in NB, we still choose OLS.
+
+#build two steps of 2SLS
+
+step3sq1 = lm(sum_trainings ~ sa_maritalstatus + sa_dependent + sum_trainingsq + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) + sa_rateofpay2 + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory + factor(year), data = df1213)#2SLS step1 to model number of trainings
+
+step3sq2 = lm(sum_trainingsq ~ sa_maritalstatus + sa_dependent + sum_trainings + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) + sa_rateofpay2 + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory + factor(year), data = df1213)#2SLS step1 to model number of trainings squared
+
+df1213$predsum_trainings = predict(step3sq1,df1213)#predict number of trainings
+df1213$predsum_trainingsq = predict(step3sq2,df1213)#predict number of trainings squared
+
+model3sq1 = lm(log(salesquantity) ~ predsum_trainings+ predsum_trainingsq + numofmonths_worked + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2 + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory + factor(year), data = df1213)#2SLS main model
+
+consstderstep3sq3 <- sqrt(diag(vcovHC(model3sq1, type="const")))#obtain robust SE
+
+stargazer(model3sq1,model3sq1,
+          se = list(NULL,consstderstep3sq3),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS with Rbst SE", "NB with Rbst SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Visualize with out of sample prediction
+newdata9 = with(mydata,data.frame(predsum_trainings = rep(0:8, each = 2), predsum_trainingsq = rep(c(0,1,4,9,16,25,36,49,64),each = 2), training_group = mean(training_group), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), salesquantity = mean(salesquantity), salesvalue = mean(salesvalue), avg_homeowner = mean(avg_homeowner), year = rep(2012:2013, length.out = 9)))#create data fram for out of sample prediction with predsum_trainings, predsum_trainings squared and year varying
+newdata9$logsalesquantity = predict(model3sq1, newdata9)#predcit log(salesquantity)
+newdata9$salesquantity = exp(newdata9$logsalesquantity)#calculate salesquantity from log
+newdata9rep = newdata9[c(1,3,5,7,9,11,13,15,17),]#take data with predsum_trainings varying
+newdata9rep$year = NULL#exclue year info
+newdata9rep$salesquantity[1] = mean(newdata9$salesquantity[1:2])#get the mean from 2012 and 2013
+newdata9rep$salesquantity[2] = mean(newdata9$salesquantity[3:4])
+newdata9rep$salesquantity[3] = mean(newdata9$salesquantity[5:6])
+newdata9rep$salesquantity[4] = mean(newdata9$salesquantity[7:8])
+newdata9rep$salesquantity[5] = mean(newdata9$salesquantity[9:10])
+newdata9rep$salesquantity[6] = mean(newdata9$salesquantity[11:12])
+newdata9rep$salesquantity[7] = mean(newdata9$salesquantity[13:14])
+newdata9rep$salesquantity[8] = mean(newdata9$salesquantity[15:16])
+newdata9rep$salesquantity[9] = mean(newdata9$salesquantity[17:18])
+
+ggplot(newdata9rep, aes(x = predsum_trainings, y = salesquantity)) + geom_line(size = 1) + xlab("Number of Trainings") + ylab("Sales Quantity") + geom_smooth()#the out of sample prediction indicts that sales quantity will slightly decrease for 0 - 2 trainings and the sales quantity will increase at an increasing rate since 3 trainings
+
+
+#Sales Value
+model3sv1 = lm(log(salesvalue+1) ~ predsum_trainings+ predsum_trainingsq + numofmonths_worked + log(sa_yearsofservice+1) + sa_rateofpay2 + sa_gender + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + log(storesqft) +totalcases + sa_assignmentcategory, data=df1213)#OLS with predidcted sum_trainings and sum_trainings square from step1s
+
+gqtest(model3sv1)#gqtest indicates there is no heterskedasicty
+bptest(model3sv1)#bptest indicates there is heterskedasicty
+
+HWrobstder3sv1 <- sqrt(diag(vcovHC(model3sv1, type="HC1")))#obtain HW robust standard error
+
+stargazer(model3sv1,model3sv1,
+          se = list(NULL,HWrobstder3sv1),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS with Rbst SE", "NB with Rbst SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+newdata10 = with(mydata,data.frame(predsum_trainings = rep(0:8, each = 2), predsum_trainingsq = rep(c(0,1,4,9,16,25,36,49,64),each = 2), training_group = mean(training_group), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), salesquantity = mean(salesquantity), salesvalue = mean(salesvalue), avg_homeowner = mean(avg_homeowner), year = rep(c(2012,2013), length.out = 9)))
+newdata10$logsalesvalue = predict(model3sv1, newdata10)
+newdata10$salesvalue = exp(newdata10$logsalesvalue)
+newdata10rep = newdata10[c(1,3,5,7,9,11,13,15,17),]
+newdata10rep$salesvalue[1] = mean(newdata10$salesvalue[1:2])
+newdata10rep$salesvalue[2] = mean(newdata10$salesvalue[3:4])
+newdata10rep$salesvalue[3] = mean(newdata10$salesvalue[5:6])
+newdata10rep$salesvalue[4] = mean(newdata10$salesvalue[7:8])
+newdata10rep$salesvalue[5] = mean(newdata10$salesvalue[9:10])
+newdata10rep$salesvalue[6] = mean(newdata10$salesvalue[11:12])
+newdata10rep$salesvalue[7] = mean(newdata10$salesvalue[13:14])
+newdata10rep$salesvalue[8] = mean(newdata10$salesvalue[15:16])
+newdata10rep$salesvalue[9] = mean(newdata10$salesvalue[17:18])
+
+ggplot(newdata10rep, aes(x = predsum_trainings, y = salesvalue)) + geom_line(size = 1) + xlab("Number of Trainings") + ylab("Sales Value")#the out of sample prediction shows that for this sample, sales value will decrease slightly for 0-3 trainings and increase after 3 trainings substantially
+
+
+#Return Quantity
+model3rq1 <- glm((returnquantity+1) ~ sum_trainings + sum_trainingsq + sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + log(salesquantity), family="poisson", data=df1213)#Poisson model
+
+model3rq2 <- glm.nb((returnquantity+1) ~ sum_trainings + sum_trainingsq +  sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + log(salesquantity), data=df1213)#Negative Binomial model
+
+model3rq3 <- lm(log(returnquantity+1) ~ sum_trainings + sum_trainingsq + sa_gender + sa_rateofpay2 + sa_assignmentcategory + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(storesqft) + factor(year) + totalcases + log(salesquantity), data=df1213)#OLS model
+
+poisson3rq1 <- glm(returnquantity~1, data=df1213, family="poisson")#Possion NULL model
+negbin3rq1 <- glm.nb(returnquantity ~ 1, data = df1213) #NB NULL model
+
+lrtest(model3rq1, poisson3rq1)#significant so Poisson model does not fit the data
+lrtest(model3rq2, negbin3rq1)#significant so NB model fits the data
+lrtest(model3rq1, model3rq2)#the significant p-values indicates that NB is better
+
+stargazer(model3rq1,model3rq2,model3rq3,
+          title="Regression Results", type="text", 
+          column.labels=c("Possion", "NB", "OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+confint(model3rq2, 'sum_trainings')#The 95% confidence interval of NB is (0.1730964,0.2633230 ) and the coefficient of OLS does not fall in the range. So OLS should not be used for handling endogeneity. However, since we don't know how to deal with endogeneity in NB, we still choose OLS.
+
+model3rq1 = lm(log(returnquantity+1) ~ predsum_trainings+ predsum_trainingsq + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2 + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + sa_assignmentcategory + factor(year) + log(salesquantity), data = df1213)#2SLS main model for return quantity
+
+consstdermodel3rq1 <- sqrt(diag(vcovHC(model3rq1, type="const")))#obtain robust SE
+
+stargazer(model3rq1,model3rq1,
+          se = list(NULL,consstdermodel3rq1),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS with Rbst SE", "NB with Rbst SE"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+newdata11 = with(mydata,data.frame(predsum_trainings = rep(0:8, each = 2), predsum_trainingsq = rep(c(0,1,4,9,16,25,36,49,64),each = 2), training_group = mean(training_group), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), salesquantity = mean(salesquantity), salesvalue = mean(salesvalue), avg_homeowner = mean(avg_homeowner), year = rep(c(2012,2013), length.out = 9)))#create data fram for out of sample prediction with predsum_trainings, predsum_trainings squared and year varying
+newdata11$logreturnquantity = predict(model3rq1, newdata11)#predict log(returnquantity)
+newdata11$returnquantity = exp(newdata11$logreturnquantity)#calculate returnquantity
+newdata11rep = newdata11[c(1,3,5,7,9,11,13,15,17),]#take data with predsum_trainings varying
+newdata11rep$year = NULL #exclude info
+newdata11rep$returnquantity[1] = mean(newdata11$returnquantity[1:2])#take the mean from 2012 and 2013
+newdata11rep$returnquantity[2] = mean(newdata11$returnquantity[3:4])
+newdata11rep$returnquantity[3] = mean(newdata11$returnquantity[5:6])
+newdata11rep$returnquantity[4] = mean(newdata11$returnquantity[7:8])
+newdata11rep$returnquantity[5] = mean(newdata11$returnquantity[9:10])
+newdata11rep$returnquantity[6] = mean(newdata11$returnquantity[11:12])
+newdata11rep$returnquantity[7] = mean(newdata11$returnquantity[13:14])
+newdata11rep$returnquantity[8] = mean(newdata11$returnquantity[15:16])
+newdata11rep$returnquantity[9] = mean(newdata11$returnquantity[17:18])
+
+ggplot(newdata11rep, aes(x = predsum_trainings, y = returnquantity)) + geom_line(size = 1) + xlab("Number of Trainings") + ylab("Return Quantity")#the out of sample prediction shows that for this sample, return quantity will decrease slightly for 0-2 trainings and increase after 3 trainings
+
+
+#Return Value
+model3rv1 = lm(log(returnvalue+1) ~ predsum_trainings+ predsum_trainingsq + log(sa_yearsofservice+1) + sa_rateofpay2 + sa_gender + avg_female + avg_age + avg_income + avg_homeowner + avg_childowner + mallsalessf + sa_assignmentcategory + log(salesvalue+1), data=df1213)#OLS with predidcted sum_trainings and sum_trainings square from step1s
+
+stargazer(model3rv1,
+          title="Regression Results", type="text", 
+          column.labels=c("ModelQ3"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+newdata12 = with(mydata,data.frame(predsum_trainings = rep(0:8, each = 2), predsum_trainingsq = rep(c(0,1,4,9,16,25,36,49,64),each = 2), training_group = mean(training_group), sa_yearsofservice = mean(log(sa_yearsofservice+1)), returnvalue=mean(mydata$returnvalue), sa_rateofpay2 = mean(sa_rateofpay2), sa_gender = mean(sa_gender),sa_maritalstatus = mean(sa_maritalstatus), numofmonths_worked = mean(numofmonths_worked), sa_dependent = mean(sa_dependent),avg_female = mean(avg_female), avg_age = mean(avg_age), avg_income = mean(avg_income),mallsalessf = mean(mallsalessf), storesqft = mean(log(storesqft)), totalcases = mean(totalcases), sa_assignmentcategory = mean(sa_assignmentcategory), avg_childowner = mean(avg_childowner), salesquantity = mean(salesquantity), salesvalue = mean(salesvalue), avg_homeowner = mean(avg_homeowner), year = rep(c(2012,2013), length.out = 9)))#create data fram for out of sample prediction with predsum_trainings, predsum_trainings squared and year varying
+newdata12$logreturnvalue = predict(model3rv1, newdata12)#predict log(returnvalue)
+newdata12$returnvalue = exp(newdata12$logreturnvalue)#calculate returnvalue
+newdata12rep = newdata10[c(1,3,5,7,9,11,13,15,17),]#take data with predsum_trainings varying
+newdata12rep$year = NULL #exclude year info
+newdata12rep$returnvalue[1] = mean(newdata12$returnvalue[1:2])#take mean from 2012 and 2013
+newdata12rep$returnvalue[2] = mean(newdata12$returnvalue[3:4])
+newdata12rep$returnvalue[3] = mean(newdata12$returnvalue[5:6])
+newdata12rep$returnvalue[4] = mean(newdata12$returnvalue[7:8])
+newdata12rep$returnvalue[5] = mean(newdata12$returnvalue[9:10])
+newdata12rep$returnvalue[6] = mean(newdata12$returnvalue[11:12])
+newdata12rep$returnvalue[7] = mean(newdata12$returnvalue[13:14])
+newdata12rep$returnvalue[8] = mean(newdata12$returnvalue[15:16])
+newdata12rep$returnvalue[9] = mean(newdata12$returnvalue[17:18])
+
+ggplot(newdata12rep, aes(x = predsum_trainings, y = returnvalue)) + geom_line(size = 1) + xlab("Number of Trainings") + ylab("Return Value")#the out of sample prediction shows that for this sample, return value will decrease slightly for 0-2 trainings and increase after 3 trainings
+```
+
+
+
+
+```{r}
+# Question4: Who benefits from the training program more? Full-time or part-time employees?
+
+#SALES VALUE
+      # IVs
+
+      #sa_dependent, sa_maritialstatus
+
+Model4iva=ivreg(log(salesvalue+1) ~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year)|(sa_dependent+ sa_maritalstatus) *(sa_assignmentcategory) + numofmonths_worked + mallsalessf+ sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female + sa_rateofpay2 + log(storesqft)+ avg_age+ avg_income+ factor(year), data=df1213)
+
+summary(Model4iva, diagnostics= TRUE) #Sargan: significant=> one exogenous variable
+
+      #sa_dependent
+Model4ivb=ivreg(log(salesvalue+1) ~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ avg_residency+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year) |(sa_dependent) *(sa_assignmentcategory) + numofmonths_worked + mallsalessf+ sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ avg_residency+ sa_rateofpay2 + log(storesqft)+ avg_age+ avg_income+  factor(year), data=df1213)
+
+summary(Model4ivb, diagnostics= TRUE) #weak instruments (fail F-test)
+
+      #maritalstatus
+Model4ivb1=ivreg(log(salesvalue+1) ~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ +sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year) |(sa_maritalstatus) *(sa_assignmentcategory) + numofmonths_worked + mallsalessf+ sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ sa_rateofpay2 + log(storesqft)+ avg_age+ avg_income+ factor(year), data=df1213)
+
+summary(Model4ivb1, diagnostics= TRUE) #although it passes F-test and Hausman test, the insignificant interaction term is counter-intuitive so we use OLS model
+
+      #Final: OLS model for SALES VALUE
+
+Model4FinalV= lm(log(salesvalue+1) ~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female++sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year), data=df1213)
+
+gqtest(Model4FinalV)
+bptest(Model4FinalV)
+HWrobstder4FinalV <- sqrt(diag(vcovHC(Model4FinalV, type="HC1")))
+
+stargazer(Model4FinalV, 
+          se=list(HWrobstder4FinalV),
+          title="Regression Results", type="text", 
+          column.labels=c("OLS-Final"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# Out-of-sample Prediction: SALES VALUE
+newdata4V = with(df1213,data.frame(training_group = rep(c(0,1), each=4), sa_assignmentcategory= rep(c(0,1), length.out=4), numofmonths_worked = mean(numofmonths_worked),mallsalessf = mean(mallsalessf), sa_gender = mean(sa_gender), sa_yearsofservice = mean(log(sa_yearsofservice+1)), totalcases= mean(totalcases), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), sa_rateofpay2= mean(sa_rateofpay2), storesqft= mean(log(storesqft)), avg_age= mean(avg_age), sa_dependent= mean(sa_dependent), avg_income= mean(avg_income),year= rep(c(2012, 2013,2012,2013), each = 2)))
+newdata4V$logsalesvalue = predict(Model4FinalV, newdata4V)
+newdata4V$salesvalue = exp(newdata4V$logsalesvalue) - 1
+newdata4Vrep = newdata4V[c(1,2,5,6),]
+newdata4Vrep$salesvalue[1] = mean(newdata4V$salesvalue[c(1,3)])
+newdata4Vrep$salesvalue[2] = mean(newdata4V$salesvalue[c(2,4)])
+newdata4Vrep$salesvalue[3] = mean(newdata4V$salesvalue[c(5,7)])
+newdata4Vrep$salesvalue[4] = mean(newdata4V$salesvalue[c(6,8)])
+
+ggplot(newdata4Vrep, aes(x = training_group, y = salesvalue)) + geom_line(aes(colour= factor(sa_assignmentcategory)), size = 1) + ylab("Predicted Sales Value")+ xlab("Training")+ scale_x_continuous(breaks=c(0,1), labels=c("NO", "Yes"))+ scale_color_discrete(labels=c("Part time","Full time"))
+
+#For Part time employees, with training, their sales value increases by 8.3 times comparing to no training.
+#For Full time employees, with training, their sales value increases by 15.4 times comparing to no training. So Full time employess benefits more from training.
+
+
+
+#SALES QUANTITY
+
+# Poisson
+Model4p=glm(salesquantity~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ sa_rateofpay2+ factor(year), data=df1213, family="poisson")
+
+Model4p1=glm(salesquantity~1, data=df1213, family="poisson")
+
+lrtest(Model4p, Model4p1) #significant so Poisson does not fit data
+
+#Negative Binomial
+
+Model4nb=glm.nb(salesquantity~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+  factor(year), data=df1213)
+
+Model4nb1= glm.nb(salesquantity~ 1, data=df1213)
+
+lrtest(Model4nb, Model4nb1) #significant => NB model fits the data
+lrtest(Model4nb,Model4p) # significant means NB is better
+
+gqtest(Model4nb)#gqtest indicates there is no heteroskedascity
+bptest(Model4nb)#bptest indicates there is heteroskedascity
+HWrobstder4nb <- sqrt(diag(vcovHC(Model4nb, type="HC1")))
+
+stargazer(Model4nb,
+          se=list(HWrobstder4nb),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#OLS Model for Quantity
+Model4OLS=lm(log(salesquantity)~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year), data=df1213)
+
+gqtest(Model4OLS)#gqtest indicates there is no heteroskedascity
+bptest(Model4OLS)#bptest indicates there is heteroskedascity
+HWrobstder4OLS <- sqrt(diag(vcovHC(Model4OLS, type="HC1")))
+
+stargazer(Model4OLS,
+          se=list(HWrobstder4OLS),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))# the coefficients in NB(1.18) and OLS(0.40) is not similar, so we use OLS
+
+    #IVs Model: dependent and maritalstatus as IVs
+
+Model4ivc= ivreg(log(salesquantity)~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+ +sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income+ factor(year)|(sa_dependent+ sa_maritalstatus) *(sa_assignmentcategory)+ numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female +sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income + factor(year), data=df1213)
+
+summary(Model4ivc, diagnostics = TRUE) #Sargan: significant=> one exogenous variable
+
+    #IV: dependent
+
+Model4ivd= ivreg(log(salesquantity)~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female++sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income + factor(year)|(sa_dependent) *(sa_assignmentcategory)+ numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income + factor(year), data=df1213)
+
+summary(Model4ivd, diagnostics = TRUE) #weak instrument (fail F-test)=>bad IVs
+
+#marital status
+
+Model4ivd1= ivreg(log(salesquantity)~ training_group*sa_assignmentcategory + numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female++sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income + factor(year)|(sa_maritalstatus) *(sa_assignmentcategory)+ numofmonths_worked + mallsalessf + sa_gender+ log(sa_yearsofservice+1)+ totalcases+ avg_homeowner+ avg_childowner+ avg_female+sa_rateofpay2+ log(storesqft)+ avg_age+ avg_income + factor(year), data=df1213)
+
+summary(Model4ivd1, diagnostics = TRUE) #Model passes the test, but the insignificant interactive term is counterintuitive, so we use OLS
+
+#FINAL Model: OLS for Sales Quantity
+
+stargazer(Model4OLS,
+          se=list(HWrobstder4OLS),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# Out-of-sample Prediction: SALES QUANTITY
+newdata4q = with(df1213,data.frame(training_group = rep(c(0,1), each=4), sa_assignmentcategory= rep(c(0,1), length.out=4), numofmonths_worked = mean(numofmonths_worked),mallsalessf = mean(mallsalessf), sa_gender = mean(sa_gender), sa_yearsofservice = mean(log(sa_yearsofservice+1)), totalcases= mean(totalcases), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), sa_rateofpay2= mean(sa_rateofpay2), storesqft= mean(log(storesqft)), avg_age= mean(avg_age), sa_dependent= mean(sa_dependent), avg_income= mean(avg_income),year= rep(c(2012, 2013,2012,2013), each = 2)))
+newdata4q$logsalesquantity = predict(Model4OLS, newdata4q)
+newdata4q$salesquantity = exp(newdata4q$logsalesquantity)
+newdata4qrep = newdata4q[c(1,2,5,6),]
+newdata4qrep$salesquantity[1] = mean(newdata4q$salesquantity[c(1,3)])
+newdata4qrep$salesquantity[2] = mean(newdata4q$salesquantity[c(2,4)])
+newdata4qrep$salesquantity[3] = mean(newdata4q$salesquantity[c(5,7)])
+newdata4qrep$salesquantity[4] = mean(newdata4q$salesquantity[c(6,8)])
+
+ggplot(newdata4qrep, aes(x = training_group, y = salesquantity)) + geom_line(aes(colour= factor(sa_assignmentcategory)), size = 1) + ylab("Predicted Sales Quantity")+ xlab("Training")+ scale_x_continuous(breaks=c(0,1), labels=c("NO", "Yes"))+ scale_color_discrete(labels=c("Part time","Full time"))
+
+#For Part time employees, with training, their sales quantity increases by 35.9% comparing to no training.
+#For Full time employees, with training, their sales value increases by 106.2% comparing to no training. So Full time employess benefits more from training.
+
+#RETURN VALUE
+
+    #OLS Thereotical Model
+model4RV = lm(log(returnvalue+1) ~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesvalue+1),data=df1213)
+
+gqtest(model4RV)
+bptest(model4RV)
+HWrobstder4RV <- sqrt(diag(vcovHC(model4RV, type="HC1")))
+
+stargazer(model4RV,
+          se=list(HWrobstder4RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-2 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+    #Endogeneity
+      #IVs: dependent and maritalstatus
+ivmodel4RV =ivreg(log(returnvalue+1) ~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf  + factor(year) + log(salesvalue+1)| (sa_dependent + sa_maritalstatus)*sa_assignmentcategory+ log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesvalue+1),data=df1213)
+
+summary(ivmodel4RV,diagnostics=TRUE) #Fail F-test
+
+#dependent as IV
+ivmodel4RV1 =ivreg(log(returnvalue+1) ~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf  + factor(year) + log(salesvalue+1)| (sa_dependent)*sa_assignmentcategory+ log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesvalue+1),data=df1213)
+summary(ivmodel4RV1,diagnostics=TRUE) #Fail F-test
+
+#marital status as IV
+ivmodel4RV2 =ivreg(log(returnvalue+1) ~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf  + factor(year) + log(salesvalue+1)| (sa_maritalstatus)*sa_assignmentcategory+ log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesvalue+1),data=df1213)
+summary(ivmodel4RV2,diagnostics=TRUE) #insignificant Hausman test and insignificant interaction term=> endogenity is negligible and the model is counter-intuitive. So we use OLS model
+
+  #Final model: RETURN VALUE
+stargazer(model4RV,
+          se=list(HWrobstder4RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-2 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Insignificant interaction terms so we conclude that training has no impact on return value for part time and full time employees.
+
+#RETURN QUANTITY
+
+# Poisson
+Model4RQp= glm(returnquantity+1~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf  + factor(year) + log(salesquantity),data=df1213, family="poisson")
+
+Model4RQp1=glm(returnquantity+1~1, data=df1213, family="poisson")
+
+lrtest(Model4RQp, Model4RQp1) #significant so Poisson does not fit the data
+
+        #Negative Binomial
+
+Model4RQNB= glm.nb(returnquantity+1~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity), data=df1213)
+
+Model4RQNB1= glm.nb(returnquantity+1~ 1, data=df1213)
+
+lrtest(Model4RQNB, Model4RQNB1) #significantso NB fits the data
+lrtest(Model4RQNB, Model4RQp) #significant=> NB is better
+
+gqtest(Model4RQNB)
+bptest(Model4RQNB)
+HWrobstder4RQNB <- sqrt(diag(vcovHC(Model4RQNB, type="HC1")))
+
+stargazer(Model4RQNB,
+          se=list(HWrobstder4RQNB),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+        #OLS Model for Quantity
+Model4RQ= lm(log(returnquantity+1)~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity), data=df1213 )
+
+gqtest(Model4RQ)
+bptest(Model4RQ)
+HWrobstder4RQ <- sqrt(diag(vcovHC(Model4RQ, type="HC1")))
+
+stargazer(Model4RQ,
+          se=list(HWrobstder4RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#Because the coefficient in NB (1.06) and OLS (0.13) are differen=> OLS model
+
+    #IVs Model: dependent and maritalstatus as IVs
+Model4RQiv= ivreg(log(returnquantity+1)~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity)| (sa_dependent + sa_maritalstatus)*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity), data=df1213) 
+
+summary(Model4RQiv, diagnostics = TRUE) #Sargan is significant=> One instrument is exogenous
+
+      #dependent as IV
+Model4RQiv1= ivreg(log(returnquantity+1)~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity)| (sa_dependent)*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity), data=df1213) 
+
+summary(Model4RQiv1, diagnostics = TRUE) #Fail F test
+
+      #marital status as IV
+Model4RQiv2= ivreg(log(returnquantity+1)~ training_group*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity)| (sa_maritalstatus)*sa_assignmentcategory + log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + factor(year) + log(salesquantity), data=df1213) 
+
+summary(Model4RQiv2, diagnostics = TRUE) #Hausman is insignificant and insignificant interaction term. So we use OLS
+
+  #Final Model: RETURN QUANTITY
+
+stargazer(Model4RQ,
+          se=list(HWrobstder4RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+# Out-of-sample Prediction: RETURN QUANTITY
+newdata4qq = with(df1213,data.frame(training_group = rep(c(0,1), each=4), sa_assignmentcategory= rep(c(0,1), length.out=4),mallsalessf = mean(mallsalessf), sa_gender = mean(sa_gender), sa_yearsofservice = mean(log(sa_yearsofservice+1)), totalcases= mean(totalcases), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), sa_rateofpay2= mean(sa_rateofpay2), avg_age= mean(avg_age), sa_dependent= mean(sa_dependent), avg_income= mean(avg_income),year= rep(c(2012, 2013,2012,2013), each = 2), salesquantity=mean(log(salesquantity))))
+newdata4qq$logreturnquantity = predict(Model4RQ, newdata4qq)
+newdata4qq$returnquantity = exp(newdata4qq$logreturnquantity)-1
+newdata4qqrep = newdata4qq[c(1,2,5,6),]
+newdata4qqrep$returnquantity[1] = mean(newdata4qq$returnquantity[c(1,3)])
+newdata4qqrep$returnquantity[2] = mean(newdata4qq$returnquantity[c(2,4)])
+newdata4qqrep$returnquantity[3] = mean(newdata4qq$returnquantity[c(5,7)])
+newdata4qqrep$returnquantity[4] = mean(newdata4qq$returnquantity[c(6,8)])
+
+ggplot(newdata4qqrep, aes(x = training_group, y = returnquantity)) + geom_line(aes(colour= factor(sa_assignmentcategory)), size = 1) + ylab("Predicted Return Quantity")+ xlab("Training")+ scale_x_continuous(breaks=c(0,1), labels=c("NO", "Yes"))+ scale_color_discrete(labels=c("Part time","Full time"))
+
+#For Part time employees, with training, their return quantity increases by 2 times comparing to no training.
+#For Full time employees, with training, their sales value increases by 1.8 times comparing to no training. So Full time employess benefits more from training.
+
+```
+
+
+
+
+```{r}
+# Question5: Who benefits from the training more: more experienced employees or less experienced employees?
+
+#SALES VALUE
+
+        #IVs: dependent, maritalstatus
+Model5iva = ivreg(log(salesvalue+1) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ totalcases + sa_rateofpay2+ log(storesqft)+ avg_income+ avg_age+ factor(year) |(sa_dependent+ sa_maritalstatus )* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ avg_homeowner+ avg_female+ avg_childowner+ sa_assignmentcategory+ sa_gender+ totalcases+ sa_rateofpay2+ log(storesqft)+ avg_income+ avg_age, data=df1213)
+
+summary(Model5iva, diagnostics = TRUE) #Sargan: significant => one instrument is exogenous
+
+      #IV: marital status
+Model5ivb= ivreg(log(salesvalue+1) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft)|(sa_maritalstatus )* (log(sa_yearsofservice+1))+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female+ avg_childowner+ sa_assignmentcategory+ sa_gender+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213) 
+
+summary(Model5ivb, diagnostics = TRUE)#Sargan: significant=> the instrument is exogenous
+
+        #IV: dependent
+Model5iv = ivreg(log(salesvalue+1) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft)|(sa_dependent )* (log(sa_yearsofservice+1))+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female+ avg_childowner+ sa_assignmentcategory+ sa_gender+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213) 
+
+summary(Model5iv, diagnostics = TRUE) #Passes all test but the insignificant interaction term is counter-intuitive. So we use OLS model
+
+
+  #Final Model: OLS- Sales Value
+
+Model5FinalV= lm(log(salesvalue+1) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+gqtest(Model5FinalV)
+bptest(Model5FinalV)
+HWrobstder5FinalV <- sqrt(diag(vcovHC(Model5FinalV, type="HC1")))
+
+stargazer(Model5FinalV,
+          se=list(HWrobstder5FinalV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model Final"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#Graph: Out-of-sample Prediction (Sales Value)
+newdata5V= with(df1213,data.frame(training_group = rep(c(0,1),length.out = 35), sa_yearsofservice= rep(0:34, each = 2), numofmonths_worked = mean(numofmonths_worked),mallsalessf = mean(mallsalessf), totalcases= mean(totalcases), sa_gender = mean(sa_gender), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), avg_residency = mean(avg_residency), sa_rateofpay2= mean(sa_rateofpay2), sa_assignmentcategory= mean(sa_assignmentcategory), avg_income= mean(avg_income), avg_age= mean(avg_age), storesqft= mean(log(storesqft))))
+newdata5V$logsalesvalue = predict(Model5FinalV, newdata5V)
+newdata5V$salesvalue= exp(newdata5V$logsalesvalue)-1
+
+ggplot(newdata5V, aes(x = sa_yearsofservice, y = salesvalue)) + geom_line(aes(colour= factor(training_group)), size = 1) + ylab("Predicted Sales Value")+ xlab("Years of Service")+ scale_color_discrete(labels=c("No training","With training"))
+
+#More years of service will reduce sales value. However, with training, salespeople always outperform untrained ones.
+
+#SALES QUANTITY
+
+  #Poisson 
+Model5p=glm(salesquantity~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213, family="poisson")
+
+Model5p1= glm(salesquantity~ 1, data=df1213, family="poisson")
+
+lrtest(Model5p, Model5p1) #significant so Poisson does not fit the data
+
+ #Negative Binomial
+Model5p2=glm.nb(salesquantity~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+Model5p3=glm.nb(salesquantity~1, data=df1213)
+
+lrtest(Model5p2,Model5p3) #significant so NB fits the data
+lrtest(Model5p, Model5p2) #significant so NB is better
+
+gqtest(Model5p2)
+bptest(Model5p2)
+HWrobstder5p2 <- sqrt(diag(vcovHC(Model5p2, type="HC1")))
+
+stargazer(Model5p2,
+          se=list(HWrobstder5p2),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+    #2IVs: dependent and maritalstatus
+Model5ivc= ivreg(log(salesquantity) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft)|(sa_dependent+ sa_maritalstatus)* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+summary(Model5ivc, diagnostics = TRUE) #Sargan is significant=> instrumets are exogenous
+
+      #IVs: dependent
+Model5ivb= ivreg(log(salesquantity) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft)|(sa_dependent)* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+summary(Model5ivb, diagnostics = TRUE) #Weak instrument (fail F-test)
+
+      #IVs: marital status
+Model5ivd= ivreg(log(salesquantity) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft)|(sa_maritalstatus)* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+summary(Model5ivd, diagnostics = TRUE) #insignificant interaction term so this is counter-intuitive so we use OLS model
+
+#OLS
+Model5FinalQ=lm(log(salesquantity) ~ training_group* log(sa_yearsofservice+1)+ numofmonths_worked+ mallsalessf+ totalcases+ avg_homeowner+ avg_female + avg_childowner+ sa_assignmentcategory+ sa_rateofpay2+ avg_income+ avg_age+ log(storesqft), data=df1213)
+
+gqtest(Model5FinalQ)
+bptest(Model5FinalQ)
+HWrobstder5FinalQ <- sqrt(diag(vcovHC(Model5FinalQ, type="HC1")))
+
+stargazer(Model5FinalQ,
+          se=list(HWrobstder5FinalQ),
+          title="Results", type="text", 
+          column.labels=c("OLS- FINAL"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) #comparison bewteen NB and OLS: interaction terms are not similar (1.21 vs 0.23). So our final model is OLS
+
+
+#Graph: Out-of-sample Prediction (Salea Quantity)
+newdata5Q= with(df1213,data.frame(training_group = rep(c(0,1),length.out = 35), sa_yearsofservice= rep(0:34, each = 2), numofmonths_worked = mean(numofmonths_worked),mallsalessf = mean(mallsalessf), totalcases= mean(totalcases), sa_gender = mean(sa_gender), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), sa_rateofpay2= mean(sa_rateofpay2), sa_assignmentcategory= mean(sa_assignmentcategory), avg_income= mean(avg_income), avg_age= mean(avg_age), storesqft= mean(log(storesqft))))
+newdata5Q$logsalesquantity = predict(Model5FinalQ, newdata5Q)
+newdata5Q$salesquantity= exp(newdata5Q$logsalesquantity)
+
+ggplot(newdata5Q, aes(x = sa_yearsofservice, y = salesquantity)) + geom_line(aes(colour= factor(training_group)), size = 1) + ylab("Predicted Sales Quantity")+ xlab("Years of Service")+ scale_color_discrete(labels=c("No training","With training"))
+ 
+#More years of service will reduce sales quantity. However, with training, salespeople always outperform untrained ones.
+
+
+#RETURN VALUE
+
+    #OLS Thereotical Model
+model5RV = lm(log(returnvalue+1) ~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1),data=df1213)
+
+gqtest(model5RV)
+bptest(model5RV)
+HWrobstder5RV <- sqrt(diag(vcovHC(model5RV, type="HC1")))
+
+stargazer(model5RV,
+          se=list(HWrobstder5RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-5 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+    #Endogeneity
+      #IVs: dependent and maritalstatus
+ivmodel5RV =ivreg(log(returnvalue+1) ~ training_group* log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1)| (sa_dependent + sa_maritalstatus)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1),data=df1213)
+
+summary(ivmodel5RV,diagnostics=TRUE) #Fail F-test
+
+#dependent as IV
+ivmodel5RV1 =ivreg(log(returnvalue+1) ~ training_group*log(sa_yearsofservice+1) + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf+ log(salesvalue+1)| (sa_dependent)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1),data=df1213)
+summary(ivmodel5RV1,diagnostics=TRUE) #Fail F-test
+
+#marital status as IV
+ivmodel5RV2 =ivreg(log(returnvalue+1) ~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1)| (sa_maritalstatus)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesvalue+1),data=df1213)
+summary(ivmodel5RV2,diagnostics=TRUE) #insignificant Hausman test and insignificant interaction term=> endogenity is negligible and the model is counter-intuitive. So we use OLS model
+
+  #Final model: RETURN VALUE
+stargazer(model5RV,
+          se=list(HWrobstder5RV),
+          title="Regression Results", type="text", 
+          column.labels=c("Model-5 Returns"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+#Insignificant interaction terms so we conclude that training has no impact on return value for lees experienced and more experienced employees.
+
+
+#RETURN QUANTITY
+
+# Poisson
+Model5RQp= glm(returnquantity+1~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity),data=df1213, family="poisson")
+
+Model5RQp1=glm(returnquantity~1, data=df1213, family="poisson")
+
+lrtest(Model5RQp, Model5RQp1) #significant so Poisson does not fit the data
+
+        #Negative Binomial
+
+Model5RQNB= glm.nb(returnquantity+1~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), data=df1213)
+
+Model5RQNB1= glm.nb(returnquantity~ 1, data=df1213)
+
+lrtest(Model5RQNB, Model5RQNB1) #significantso NB fits the data
+lrtest(Model5RQNB, Model5RQp) #significant=> NB is better
+
+gqtest(Model5RQNB)
+bptest(Model5RQNB)
+HWrobstder5RQNB <- sqrt(diag(vcovHC(Model5RQNB, type="HC1")))
+
+stargazer(Model5RQNB,
+          se=list(HWrobstder5RQNB),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+        #OLS Model for Quantity
+Model5RQ= lm(log(returnquantity+1)~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf+ log(salesquantity), data=df1213 )
+
+gqtest(Model5RQ)
+bptest(Model5RQ)
+HWrobstder5RQ <- sqrt(diag(vcovHC(Model5RQ, type="HC1")))
+
+stargazer(Model5RQ,
+          se=list(HWrobstder5RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#Because the coefficient in NB (1.02) and OLS (0.07) are differen=> OLS model
+
+    #IVs Model: dependent and maritalstatus as IVs
+Model5RQiv= ivreg(log(returnquantity+1)~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity)| (sa_dependent + sa_maritalstatus)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), data=df1213) 
+
+summary(Model5RQiv, diagnostics = TRUE) #Sargan is significant=> One instrument is exogenous
+
+      #dependent as IV
+Model5RQiv1= ivreg(log(returnquantity+1)~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity)| (sa_dependent)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), data=df1213) 
+
+summary(Model5RQiv1, diagnostics = TRUE) #Fail F test
+
+      #marital status as IV
+Model5RQiv2= ivreg(log(returnquantity+1)~ training_group*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity)| (sa_maritalstatus)*log(sa_yearsofservice+1)+ sa_assignmentcategory + sa_gender + sa_rateofpay2+ avg_female + avg_age + avg_income + avg_childowner + avg_homeowner + mallsalessf + log(salesquantity), data=df1213) 
+
+summary(Model5RQiv2, diagnostics = TRUE) #Hausman is insignificant and insignificant interaction term. So we use OLS
+
+  #Final Model: RETURN QUANTITY
+
+stargazer(Model5RQ,
+          se=list(HWrobstder5RQ),
+          title="Results", type="text", 
+          column.labels=c("OLS"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+#Graph: Out-of-sample Prediction (Salea Quantity)
+newdata5Qq= with(df1213,data.frame(training_group = rep(c(0,1),length.out = 35), sa_yearsofservice= rep(0:34, each = 2),mallsalessf = mean(mallsalessf), totalcases= mean(totalcases), sa_gender = mean(sa_gender), avg_homeowner= mean(avg_homeowner), avg_childowner= mean(avg_childowner),avg_female = mean(avg_female), sa_rateofpay2= mean(sa_rateofpay2), sa_assignmentcategory= mean(sa_assignmentcategory), avg_income= mean(avg_income), avg_age= mean(avg_age), salesquantity=mean(log(salesquantity))))
+newdata5Qq$logreturnquantity = predict(Model5RQ, newdata5Qq)
+newdata5Qq$returnquantity= exp(newdata5Qq$logreturnquantity)
+
+ggplot(newdata5Qq, aes(x = sa_yearsofservice, y = returnquantity)) + geom_line(aes(colour= factor(training_group)), size = 1) + ylab("Predicted Return Quantity")+ xlab("Years of Service")+ scale_color_discrete(labels=c("No training","With training"))
+
+#More years of service will increase return quantity. With training, salespeople always have more return quantity than untrained ones, which may arise from overselling.
+
+
+```
+
+
+```{r}
+# Question6: Is the impact of training on sales performance different for employees who completed the service and selling training (i.e.,those who know how to sell) from that for employees who did not complete the service and selling training (i.e.,those who do not know how to sell)?
+# IVs
+
+df13 = mydata[mydata$year == 2013, ]
+df13a = df13[df13$sa_yearsofservice!=0,]
+
+hist(log(df13$salesvalue))
+hist(log(df13$salesquantity))
+hist(log(df13$sa_yearsofservice))
+summary(df13)
+
+model6sv1 = lm(log(salesvalue+1) ~ service_selling + numofmonths_worked + log(sa_yearsofservice+1)  + avg_female + avg_age + avg_income + mallsalessf  +totalcases + sa_assignmentcategory + log(storesqft)+ sa_rateofpay2 + avg_childowner + avg_homeowner, data=df13) #Linear model for sales value
+
+model6sq1 = glm((salesquantity) ~ service_selling + numofmonths_worked + log(sa_yearsofservice+1)  +    avg_female + avg_age + avg_income + mallsalessf  +totalcases + sa_assignmentcategory + log(storesqft) + sa_rateofpay2 + avg_childowner + avg_homeowner, data=df13, family="poisson") # Poisson count model for sales quantity
+
+poisson6sq1 = glm((salesquantity) ~ 1, data=df13, family="poisson") #creating null poisson model to check model fit
+lrtest(model6sq1, poisson6sq1) # poisson model fit
+#Poisson model does not have a model fit. Therefore trying Negative binomial
+
+
+model6sq2 = glm.nb((salesquantity) ~ service_selling + numofmonths_worked + log(sa_yearsofservice+1)  +    avg_female + avg_age + avg_income + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf , data=df13) # Negative Binomial count model for sales quantity
+
+negbin6sq2 = glm.nb((salesquantity) ~ 1, data=df13) #creating null negative binomial model to check model fit
+
+lrtest(model6sq2, negbin6sq2)# negative binomial model fit
+#Negative binomial model has a model fit
+lrtest(model6sq1, model6sq2) #significant so NB is better
+
+model6sq3 = lm(log(salesquantity) ~ service_selling + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf, data=df13) #linear model for sales quantity
+
+gqtest(model6sq2)
+bptest(model6sq2)
+HWrobstder6sq2 <- sqrt(diag(vcovHC(model6sq2, type="HC1")))
+
+stargazer(model6sq2,
+          se=list(HWrobstder6sq2),
+          apply.coef = exp, t.auto=F, p.auto = F,
+          title="Results", type="text", 
+          column.labels=c("IRR"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+gqtest(model6sq3)
+bptest(model6sq3)
+HWrobstder6sq3 <- sqrt(diag(vcovHC(model6sq3, type="HC1")))
+
+stargazer(model6sq3,
+          se=list(HWrobstder6sq3),
+          title="Regression Results", type="text", 
+          column.labels=c("Sales Qty LM"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001)) 
+
+confint(model6sq2,'service_selling')
+
+#It is seen that the Negative Binomial Model (1.06) and OLS model (0.58) for the model with Sales Quantity as key independent variable do not have similar values for co-efficients. Also tested for confidence intervals(-0.1616949 , 0.2871253 ), but the results are not favorable. But for finding the IVs, we will be using the OLS model in the 2SLS test.
+
+#SALES VALUE: 2SLS model with sa_dependent and sa_maritalstatus as IVs
+model6sv2 =ivreg(log(salesvalue+1) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1)  + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) |  sa_maritalstatus + +sa_dependent + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sv2, diagnostics = TRUE) #Fail F-test
+
+#IV: dependent
+model6sv21 =ivreg(log(salesvalue+1) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1)  + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) | +sa_dependent + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sv21, diagnostics = TRUE) #Fail F test
+
+#IV: marital status
+model6sv22 =ivreg(log(salesvalue+1) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1)  + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) |  sa_maritalstatus + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sv22, diagnostics = TRUE) #passes all test and significant term. So we use this model
+
+
+#IV: dependent and marital status for SALES QUANTITY
+model6sq4 =ivreg(log(salesquantity) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) |  sa_maritalstatus + sa_dependent + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sq4, diagnostics = TRUE) #Fail F-test
+
+#IV: dependent
+model6sq41 =ivreg(log(salesquantity) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) | sa_dependent + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sq41, diagnostics = TRUE) #Fail F test
+
+#IV: marital status
+model6sq42 =ivreg(log(salesquantity) ~ service_selling + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) + avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft) | sa_maritalstatus + sa_gender + numofmonths_worked + log(sa_yearsofservice+1) +    avg_female + avg_age + avg_income  + sa_assignmentcategory  + sa_rateofpay2 + avg_childowner + avg_homeowner + totalcases + mallsalessf + log(storesqft), data=df13)
+
+summary(model6sq42, diagnostics = TRUE)#passes all test and significant term. So we use this model
+
+# For the final result, we are going with the IV model for Sales Value and Sales Quanity
+
+gqtest(model6sv22)
+bptest(model6sv22)
+HWrobstder6sv22 <- sqrt(diag(vcovHC(model6sv22, type="HC1")))
+
+# Final model: SALES VALUE
+stargazer(model6sv22,
+          se=list(HWrobstder6sv22),
+          title="Regression Results", type="text", 
+          column.labels=c("Sales Value"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+gqtest(model6sq42)
+bptest(model6sq42)
+HWrobstder6sv42 <- sqrt(diag(vcovHC(model6sq42, type="HC1")))
+
+#Final Model: SALES QUANTITY
+stargazer(model6sq42,
+          se=list(HWrobstder6sv42),
+          title="Regression Results", type="text", 
+          column.labels=c("Sales Quantity"),
+          df=FALSE, digits=2, star.cutoffs = c(0.05,0.01,0.001))
+
+# It is seen that the Service Selling training has a significance impact on the overall Sales Value and on the Sales Quantity. Having service selling increases sales value 11.31 times and sales quantity by 5.28 times.
+
+```
+
+
